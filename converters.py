@@ -20,17 +20,23 @@ def convert_celeste_bmp(input, params):
     img = Image.open(input)
     assert max(idx for (count, idx) in img.getcolors()) <= 15
 
-    imgp = img.getpalette()[:48]
+    imgp = img.getpalette(rawmode='RGB')[:48]
+    print("P:", imgp)
     palette = bytes()
-    for i in range(16):
-        r, g, b = imgp[3*i:3*(i+1)]
+    pallen = min(16, len(imgp)//3)
+    for i in range(pallen):
+        r, g, b = imgp[3*i : 3*(i+1)]
         color = ((r & 0xf8) << 8) | ((g & 0xfc) << 3) | ((b & 0xf8) >> 3)
         palette += fxconv.u16(color)
+    for i in range(16 - pallen):
+        palette += fxconv.u16(0)
 
     header = bytes()
-    header += fxconv.u16(0x03) # P4
-    header += fxconv.u16(0) # Background color 0 is transparent
+    header += fxconv.u8(0x03) #IMAGE_P4_RGB565A
+    header += fxconv.u8(0x01 | 0x02) # flags - RO data
+    header += fxconv.i16(16) # 16 colors in palette
     header += fxconv.u16(img.width) + fxconv.u16(img.height)
+    header += fxconv.i32(0) # stride??
 
     encoded = bytes()
     assert (img.width % 2) == 0

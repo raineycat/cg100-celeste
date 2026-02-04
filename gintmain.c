@@ -4,6 +4,7 @@
 #include <gint/rtc.h>
 #include <gint/clock.h>
 #include <gint/defs/attributes.h>
+#include <limits.h>
 #include <stdint.h>
 
 typedef uint8_t Uint8;
@@ -23,10 +24,9 @@ typedef struct {
 #include <assert.h>
 #include <errno.h>
 #include <time.h>
-#ifdef _3DS
-#include <3ds.h>
-#endif
 #include "celeste.h"
+
+#define SAVE_FILE "\\\\fls0\\celeste_save.bin"
 
 extern bopti_image_t assets_gfx, assets_font;
 bopti_image_t *gfx_1, *font_1, *gfx_2, *font_2;
@@ -60,6 +60,23 @@ static void set_scale(int s, int y_position_group)
 	}
 }
 
+bopti_image_t *resize(bopti_image_t const *src, int w, int h)
+{
+    bopti_image_t *img = image_alloc(w, h, src->format);
+    if(!img) return NULL;
+
+		image_copy_palette(src, img, -1);
+
+    for(int y = 0; y < h; y++)
+    for(int x = 0; x < w; x++) {
+        int color = image_get_pixel(src, x * src->width / w, y * src->height / h);
+        image_set_pixel(img, x, y, color);
+    }
+
+    return img;
+}
+
+
 static void rect(int x1, int y1, int x2, int y2, int c)
 {
 	/* drect() with viewport translation. We clamp manually because drect()
@@ -83,7 +100,7 @@ static void load_controls(int setting)
 		CONTROL_UP = KEY_UP;
 		CONTROL_DOWN = KEY_DOWN;
 		CONTROL_JUMP = KEY_SHIFT;
-		CONTROL_DASH = KEY_OPTN;
+		CONTROL_DASH = KEY_XOT;
 		CONTROL_PAUSE = KEY_VARS;
 	}
 	else if(setting == 1) {
@@ -145,97 +162,18 @@ static void ResetPalette(void) {
 	load_palette(base_palette);
 }
 
-//--------------- Straight from the gint upscaling demo, specialized for P4
-
-size_t image_size_wh(int width, int height)
-{
-    return sizeof(bopti_image_t) + 32 + ((width + 1) / 2) * height;
-}
-
-size_t image_size(bopti_image_t const *img)
-{
-    return image_size_wh(img->width, img->height);
-}
-
-int get_pixel(bopti_image_t const *img, int x, int y)
-{
-    uint8_t *bytes = (void *)img->data;
-    int s = (img->width + 1) >> 1;
-    int i = y * s + (x >> 1) + 32;
-    if(x & 1)
-        return bytes[i] & 0x0f;
-    else
-        return bytes[i] >> 4;
-}
-
-void set_pixel(bopti_image_t *img, int x, int y, int color)
-{
-    uint8_t *bytes = (void *)img->data;
-    int s = (img->width + 1) >> 1;
-    int i = y * s + (x >> 1) + 32;
-    if(x & 1)
-        bytes[i] = (bytes[i] & 0xf0) | (color & 0x0f);
-    else
-        bytes[i] = (bytes[i] & 0x0f) | ((color & 0x0f) << 4);
-}
-
-bopti_image_t *resize(bopti_image_t const *src, int w, int h)
-{
-    size_t size = image_size_wh(w, h);
-    bopti_image_t *img = malloc(size);
-    if(!img) return NULL;
-
-    img->profile = src->profile;
-    img->alpha = src->alpha;
-    img->width = w;
-    img->height = h;
-    memcpy(img->data, src->data, 32);
-
-    for(int y = 0; y < h; y++)
-    for(int x = 0; x < w; x++) {
-        int color = get_pixel(src, x * src->width / w, y * src->height / h);
-        set_pixel(img, x, y, color);
-    }
-
-    return img;
-}
-
-//---------------
-
-static void loadbmpscale(char* filename, bopti_image_t ** s, int scale) {
-
-	bopti_image_t const *i;
-	if(!strcmp(filename, "font.bmp"))
-		i = &assets_font;
-	else if(!strcmp(filename, "gfx.bmp"))
-		i = &assets_gfx;
-	else {
-		*s = NULL;
-		return;
-	}
-
-	bopti_image_t *scaled = resize(i, i->width*scale, i->height*scale);
-	assert(scaled != NULL);
-
-// GINTTODO: Palette is involved *in* the surface
-//	SDL_SetPalette(surf, SDL_PHYSPAL | SDL_LOGPAL, (SDL_Color*)base_palette, 0, 16);
-//	SDL_SetColorKey(surf, SDL_SRCCOLORKEY, 0);
-
-	*s = scaled;
-}
-
 #define LOGLOAD(w) printf("loading %s...", w)
 #define LOGDONE() printf("done\n")
 
 static void LoadData(void) {
 	LOGLOAD("gfx.bmp");
 	gfx_1 = &assets_gfx;
-	loadbmpscale("gfx.bmp", &gfx_2, 2);
+	gfx_2 = resize(&assets_gfx, assets_gfx.width * 2, assets_gfx.height * 2);
 	LOGDONE();
 	
 	LOGLOAD("font.bmp");
 	font_1 = &assets_font;
-	loadbmpscale("font.bmp", &font_2, 2);
+	font_2 = resize(&assets_font, assets_font.width * 2, assets_font.height * 2);	
 	LOGDONE();
 }
 #include "tilemap.h"
@@ -285,6 +223,22 @@ static int frame_timer = -1;
 static volatile int frame_flag = 1;
 static void mainLoop(void);
 
+void save_state_file(void* data, int size) {
+	FILE*f = fopen(SAVE_FILE, "wb");
+	if(f) {
+		fwrite(data, size, 1, f);
+		fclose(f);
+	}
+}
+
+void load_state_file(void* buf, int size) {
+	FILE*f = fopen(SAVE_FILE, "rb");
+	if(f && buf) {
+		fread(buf, size, 1, f);
+		fclose(f);
+	}
+}
+
 int main(int argc, char** argv) {
 	dclear(C_BLACK);
 	// No triple buffering
@@ -295,39 +249,6 @@ int main(int argc, char** argv) {
 	printf("game state size %gkb\n", Celeste_P8_get_state_size()/1024.);
 
 	printf("now loading...\n");
-#if 0
-// GINTTODO: Image during loading screen
-	{
-		const unsigned char loading_bmp[] = {
-			0x42,0x4d,0xca,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x82,0x00,
-			0x00,0x00,0x6c,0x00,0x00,0x00,0x24,0x00,0x00,0x00,0x09,0x00,
-			0x00,0x00,0x01,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x48,0x00,
-			0x00,0x00,0x23,0x2e,0x00,0x00,0x23,0x2e,0x00,0x00,0x02,0x00,
-			0x00,0x00,0x02,0x00,0x00,0x00,0x42,0x47,0x52,0x73,0x00,0x00,
-			0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-			0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-			0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-			0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x02,0x00,
-			0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-			0x00,0x00,0x00,0x00,0x00,0x00,0xff,0xff,0xff,0x00,0x00,0x00,
-			0x00,0x00,0xe0,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x10,0x00,
-			0x00,0x00,0x66,0x3e,0xf1,0x24,0xf0,0x00,0x00,0x00,0x49,0x44,
-			0x92,0x24,0x90,0x00,0x00,0x00,0x49,0x3c,0x92,0x24,0x90,0x00,
-			0x00,0x00,0x49,0x04,0x92,0x24,0x90,0x00,0x00,0x00,0x46,0x38,
-			0xf0,0x3c,0xf0,0x00,0x00,0x00,0x40,0x00,0x12,0x00,0x00,0x00,
-			0x00,0x00,0xc0,0x00,0x10,0x00,0x00,0x00,0x00,0x00
-		};
-		SDL_RWops* rw = SDL_RWFromConstMem(loading_bmp, sizeof loading_bmp);
-		SDL_Surface* loading = SDL_LoadBMP_RW(rw, 1);
-		if (!loading) goto skip_load;
-
-		SDL_Rect rc = {60, 60};
-		SDL_BlitSurface(loading,NULL,screen,&rc);
-		
-		SDL_Flip(screen);
-		SDL_FreeSurface(loading);
-	} skip_load:
-#endif
 
 	LoadData();
 	set_scale(1, -1);
@@ -339,6 +260,7 @@ int main(int argc, char** argv) {
 	//for reset
 	initial_game_state = malloc(Celeste_P8_get_state_size());
 	if (initial_game_state) Celeste_P8_save_state(initial_game_state);
+	load_state_file(initial_game_state, Celeste_P8_get_state_size());
 
 	Celeste_P8_set_rndseed((unsigned)(time(NULL) + rtc_ticks()));
 
@@ -355,9 +277,11 @@ int main(int argc, char** argv) {
 	if (game_state) free(game_state);
 	if (initial_game_state) free(initial_game_state);
 
-	free(gfx);
-	free(font);
-
+	//free(gfx);
+  //free(font);
+  image_free(gfx_2);
+  image_free(font_2);
+  
 	return 0;
 }
 
@@ -399,6 +323,7 @@ static void mainLoop(void) {
 			if (game_state) {
 				OSDset("save state");
 				Celeste_P8_save_state(game_state);
+				save_state_file(game_state, Celeste_P8_get_state_size());
 			}
 			break;
 		} else if (ev.key == KEY_F2) { //load state
@@ -408,10 +333,10 @@ static void mainLoop(void) {
 				Celeste_P8_load_state(game_state);
 			}
 			break;
-		} else if (ev.key == KEY_F3) { //toggle screenshake (e / L+R)
+		} else if (ev.key == KEY_7) { //toggle screenshake (e / L+R)
 			enable_screenshake = !enable_screenshake;
 			OSDset("screenshake: %s", enable_screenshake ? "on" : "off");
-		} else if (ev.key == KEY_F4) {
+		} else if (ev.key == KEY_8) {
 			static int setting = 0;
 			setting = (setting + 1) % 4;
 
@@ -421,7 +346,7 @@ static void mainLoop(void) {
 				set_scale(2, setting-1);
 
 			dclear(C_BLACK);
-		} else if (ev.key == KEY_F5) {
+		} else if (ev.key == KEY_9) {
 			static int setting = 0;
 			setting = (setting + 1) % 3;
 			load_controls(setting);
@@ -436,6 +361,7 @@ static void mainLoop(void) {
 	if (keydown(CONTROL_JUMP))  buttons_state |= (1<<4);
 	if (keydown(CONTROL_DASH))  buttons_state |= (1<<5);
 
+	//dclear(C_BLACK);
 	if (paused) {
 		const int x0 = PICO8_W/2-3*4, y0 = 8;
 
@@ -455,11 +381,15 @@ static void mainLoop(void) {
 static int gettileflag(int, int);
 static void p8_line(int,int,int,int,unsigned char);
 
+
+//	rect(x, y, width, height, INT_MAX);
+	// dsubimage(x, y, src, left, top, width, height, 0);
+
 static void Xblit(bopti_image_t *src, SDL_Rect *srcrect, SDL_Rect *dstrect,
 	int color, int flipx, int flipy)
 {
-	/* Find the destination rectangle in screen coordinates by intersecting
-	   the viewport with the screen */
+	//Find the destination rectangle in screen coordinates by intersecting
+	  // the viewport with the screen 
 	SDL_Rect fulldst = {scale_x,scale_y,PICO8_W*scale,PICO8_H*scale};
 	if(fulldst.x < 0) {
 		fulldst.w += fulldst.x;
@@ -474,7 +404,7 @@ static void Xblit(bopti_image_t *src, SDL_Rect *srcrect, SDL_Rect *dstrect,
 	if(fulldst.y + fulldst.h > DHEIGHT)
 		fulldst.h = DHEIGHT - fulldst.y;
 
-	/* If the destination rectangle is NULL, use the entire dest surface */
+	//If the destination rectangle is NULL, use the entire dest surface 
 	if (!dstrect)
 		dstrect = &fulldst;
 	else {
@@ -484,7 +414,7 @@ static void Xblit(bopti_image_t *src, SDL_Rect *srcrect, SDL_Rect *dstrect,
 
 	int srcx, srcy, w, h;
 
-	/* clip the source rectangle to the source surface */
+	//clip the source rectangle to the source surface 
 	if (srcrect) {
 		int maxw, maxh;
 
@@ -516,7 +446,7 @@ static void Xblit(bopti_image_t *src, SDL_Rect *srcrect, SDL_Rect *dstrect,
 		h = src->height;
 	}
 
-	/* clip the destination rectangle against the clip rectangle */
+	//clip the destination rectangle against the clip rectangle 
 	{
 		SDL_Rect const *clip = &fulldst;
 		int dx, dy;
@@ -542,21 +472,23 @@ static void Xblit(bopti_image_t *src, SDL_Rect *srcrect, SDL_Rect *dstrect,
 			h -= dy;
 	}
 
+
 	#define _blitter(dp, xflip) do \
 	for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) { \
-		int p = get_pixel(src, !xflip ? srcx+x : srcx+(w-x-1), srcy+y); \
-    		if (p) gint_vram[(dstrect->y+y)*DWIDTH + dstrect->x+x] = getcolor(dp); \
+		int p = image_get_pixel(src, !xflip ? srcx+x : srcx+(w-x-1), srcy+y); \
+    		if (p) gint_vram[(dstrect->y+y)*DWIDTH + dstrect->x+x] = dp; \
 	} while(0)
 
 	if (w && h) {
-		if (color && flipx) _blitter(color, 1);
+		/*if (color && flipx) _blitter(getcolor(color), 1);
 		else if (!color && flipx) _blitter(p, 1);
-		else if (color && !flipx) _blitter(color, 0);
-		else if (!color && !flipx) _blitter(p, 0);
-	}
+		else if (color && !flipx) _blitter(getcolor(color), 0);
+		else if (!color && !flipx) _blitter(p, 0);*/
 
-	#undef _blitter
+		dsubimage(dstrect->x, dstrect->y, src, srcx, srcy, w, h, 0);
+	}
 }
+
 
 static void p8_rectfill(int x0, int y0, int x1, int y1, int col) {
 	int w = (x1 - x0 + 1)*scale;
@@ -566,6 +498,7 @@ static void p8_rectfill(int x0, int y0, int x1, int y1, int col) {
 	}
 }
 
+#if 1
 static void p8_print(const char* str, int x, int y, int col) {
 	for (char c = *str; c; c = *(++str)) {
 		c &= 0x7F;
@@ -579,6 +512,13 @@ static void p8_print(const char* str, int x, int y, int col) {
 		x += 4;
 	}
 }
+
+#else
+
+static void p8_print(const char* str, int x, int y, int col) {
+	dtext(x*scale, y*scale, getcolor(col), str);
+}
+#endif
 
 int pico8emu(CELESTE_P8_CALLBACK_TYPE call, ...) {
 	static int camera_x = 0, camera_y = 0;
@@ -698,13 +638,6 @@ int pico8emu(CELESTE_P8_CALLBACK_TYPE call, ...) {
 			int x = INT_ARG() - camera_x;
 			int y = INT_ARG() - camera_y;
 			int col = INT_ARG() % 16;
-
-#ifdef _3DS
-			if (!strcmp(str, "x+c")) {
-				//this is confusing, as 3DS uses a+b button, so use this hack to make it more appropiate
-				str = "a+b";
-			}
-#endif
 
 			p8_print(str,x,y,col);
 		} break;
@@ -831,5 +764,3 @@ static void p8_line(int x0, int y0, int x1, int y1, unsigned char color) {
 	}
 	#undef PLOT
 }
-
-// vim: ts=2 sw=2 noexpandtab
