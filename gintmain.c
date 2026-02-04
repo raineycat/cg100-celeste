@@ -26,7 +26,10 @@ typedef struct {
 #include <time.h>
 #include "celeste.h"
 
-#define SAVE_FILE "\\\\fls0\\celeste_save.bin"
+#define SAVE_FILE "celeste_save.bin"
+
+
+static void OSDset(const char* fmt, ...);
 
 extern bopti_image_t assets_gfx, assets_font;
 bopti_image_t *gfx_1, *font_1, *gfx_2, *font_2;
@@ -236,6 +239,8 @@ void load_state_file(void* buf, int size) {
 	if(f && buf) {
 		fread(buf, size, 1, f);
 		fclose(f);
+	}else {
+		OSDset("no save file!");
 	}
 }
 
@@ -260,7 +265,6 @@ int main(int argc, char** argv) {
 	//for reset
 	initial_game_state = malloc(Celeste_P8_get_state_size());
 	if (initial_game_state) Celeste_P8_save_state(initial_game_state);
-	load_state_file(initial_game_state, Celeste_P8_get_state_size());
 
 	Celeste_P8_set_rndseed((unsigned)(time(NULL) + rtc_ticks()));
 
@@ -318,7 +322,7 @@ static void mainLoop(void) {
 		} else if (0 && ev.key == KEY_5) {
 			Celeste_P8__DEBUG();
 			break;
-		} else if (ev.key == KEY_F1) { //save state
+		} else if (ev.key == KEY_PAGEDOWN) { //save state
 			game_state = game_state ? game_state : malloc(Celeste_P8_get_state_size());
 			if (game_state) {
 				OSDset("save state");
@@ -326,12 +330,14 @@ static void mainLoop(void) {
 				save_state_file(game_state, Celeste_P8_get_state_size());
 			}
 			break;
-		} else if (ev.key == KEY_F2) { //load state
-			if (game_state) {
+		} else if (ev.key == KEY_PAGEUP) { //load state			
+			
+			game_state = game_state ? game_state : malloc(Celeste_P8_get_state_size());
+			load_state_file(game_state, Celeste_P8_get_state_size());
 				OSDset("load state");
 				if (paused) paused = 0;
 				Celeste_P8_load_state(game_state);
-			}
+			
 			break;
 		} else if (ev.key == KEY_7) { //toggle screenshake (e / L+R)
 			enable_screenshake = !enable_screenshake;
